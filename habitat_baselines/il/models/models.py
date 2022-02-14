@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+from torchvision.models import resnet101
+
 from habitat import logger
 
 
@@ -212,6 +214,201 @@ class MultitaskCNN(nn.Module):
         return out_seg, out_depth, out_ae
 
 
+class UNETEncoderBlock(nn.Module):
+    """
+    The building brick of the left part of the UNET architecture.
+    Batch normalization is added as it improves performance of the unit.
+    """
+
+    def __init__(self, in_channels, out_channels):
+        super(UNETEncoderBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                               padding="same")
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
+                               padding="same")
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        x = self.relu(self.bn1(self.conv1(x)))
+        return self.relu(self.bn2(self.conv2(x)))
+
+
+class UNETDecoderBlock(nn.Module):
+    """
+    Building brick of the right part of the UNET architecture.
+    """
+
+    def __init__(self, in_channels, out_channels, inter_channels=None):
+        super(UNETDecoderBlock, self).__init__()
+        self.up_conv = nn.ConvTranspose2d(
+            in_channels, out_channels, kernel_size=2, stride=2, padding=0
+        )
+
+        if inter_channels is None:
+            inter_channels = 2 * out_channels
+        self.conv_block = UNETEncoderBlock(inter_channels, out_channels)
+
+    def forward(self, x, skip_conn):
+        x = self.up_conv(x)
+        return self.conv_block(torch.cat([skip_conn, x], dim=1))
+
+
+class UNETDecoder(nn.Module):
+    """
+    The right part of the UNET architecture. Returns reconstruction for
+    semantic segmentation and rgb, depth image.
+    """
+
+    def __init__(self, seg_channels, depth_channels=1, rgb_channels=3):
+        super(UNETDecoder, self).__init__()
+
+        # In case of input_image.shape = (3, 256, 256) we get
+        # (16, 16) -> (32, 32):
+        self.decoder_block1 = UNETDecoderBlock(1024, 256)
+        # (32, 32) -> (64, 64):
+        self.decoder_block2 = UNETDecoderBlock(256, 128)
+        # (64, 64) -> (128, 128):
+        self.decoder_block3 = UNETDecoderBlock(128, 64)
+        # (128, 128) -> (256, 256):
+        self.decoder_block4 = UNETDecoderBlock(64, 32, inter_channels=35)
+
+        self.final_conv_seg = nn.Conv2d(32, seg_channels, kernel_size=1)
+        self.final_conv_depth = nn.Conv2d(32, depth_channels, kernel_size=1)
+        self.final_conv_rgb = nn.Conv2d(32, rgb_channels, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x, skip_conns):
+        x = self.decoder_block1(x, skip_conns[-1])
+        x = self.decoder_block2(x, skip_conns[-2])
+        x = self.decoder_block3(x, skip_conns[-3])
+        x = self.decoder_block4(x, skip_conns[-4])
+
+        output_seg = self.sigmoid(self.final_conv_seg(x))
+        output_depth = self.sigmoid(self.final_conv_depth(x))
+        output_rgb = self.sigmoid(self.final_conv_rgb(x))
+        return output_seg, output_depth, output_rgb
+
+
+class MultitaskResNet101(nn.Module):
+    """
+    CNN module. UNET architecture that utilizes parts of ResNet101 as encoder
+    and bridge (bottleneck). Numbers in names mean ordinal numbers from the
+    output of torchsummary.summary(resnet101, (3, 256, 256)).
+    Note that torchvision.models.resnet101
+    is loaded always pretrained as we don't have an intention to train it from
+    nothing.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 41,
+        only_encoder: bool = False,
+        pretrained: bool = False,
+        checkpoint_path: str = None,
+        freeze_encoder: bool = False
+    ):
+        super(MultitaskResNet101, self).__init__()
+
+        self.num_classes = num_classes
+        self.only_encoder = only_encoder
+
+        self.resnet = resnet101(pretrained=True)
+        self.decoder = UNETDecoder(seg_channels=self.num_classes)
+
+        self.avg_pool = nn.AdaptiveMaxPool2d((4, 4))
+
+        # TODO: check weights initialization
+        if self.only_encoder:
+            if pretrained:
+                assert checkpoint_path is None, \
+                    "If CNN is used as encoder, a checkpoint must be provided!"
+
+                logger.info(
+                    "Loading resnet-based CNN weights from {}".format(
+                        checkpoint_path
+                    )
+                )
+                checkpoint = torch.load(
+                    checkpoint_path, map_location={"cuda:0": "cpu"}
+                )
+                self.load_state_dict(checkpoint)
+
+                if freeze_encoder:
+                    for param in self.parameters():
+                        param.requires_grad = False
+
+    def forward(self, x: Tensor):
+        ############## ENCODER ##############
+        feature_maps = [x, ]
+        feat_map1 = self.resnet.relu(self.resnet.bn1(self.resnet.conv1(x)))
+        feature_maps.append(feat_map1)  # ReLU-3, before (128, 128) -> (64, 64)
+
+        input_to_layer2 = self.resnet.layer1(self.resnet.maxpool(feat_map1))
+
+        # Part of the zeroth Bottleneck of the SECOND layer
+        conv2d_37 = self.resnet.layer2[0].conv1
+        bn_38 = self.resnet.layer2[0].bn1
+        relu_39 = self.resnet.layer2[0].relu
+        feat_map2 = relu_39(bn_38(conv2d_37(input_to_layer2)))
+        feature_maps.append(feat_map2)  # ReLU-39, before (64, 64) -> (32, 32)
+
+        # Remained part of the zeroth Bottleneck
+        conv2d_40 = self.resnet.layer2[0].conv2
+        bn_41 = self.resnet.layer2[0].bn2
+        relu_42 = self.resnet.layer2[0].relu
+        conv2d_43 = self.resnet.layer2[0].conv3
+        bn_44 = self.resnet.layer2[0].bn3
+        conv2d_45_bn_46 = self.resnet.layer2[0].downsample
+        relu_47 = self.resnet.layer2[0].relu
+        out2 = bn_44(conv2d_43(relu_42(bn_41(conv2d_40(feat_map2)))))
+        out2 += conv2d_45_bn_46(
+            input_to_layer2  # Downsampling from the layer input
+        )
+        out2 = relu_47(out2)
+        # Remained part of the second layer
+        out2 = self.resnet.layer2[1](out2)
+        out2 = self.resnet.layer2[2](out2)
+        input_to_layer3 = self.resnet.layer2[3](out2)
+
+        # Part of the zeroth Bottleneck of the THIRD layer
+        conv2d_79 = self.resnet.layer3[0].conv1
+        bn_80 = self.resnet.layer3[0].bn1
+        relu_81 = self.resnet.layer3[0].relu
+        feat_map3 = relu_81(bn_80(conv2d_79(input_to_layer3)))
+        feature_maps.append(feat_map3)  # ReLU-81, before (32, 32) -> (16, 16)
+
+        ############## BRIDGE ##############
+        # Remained part of the zeroth Bottleneck
+        conv2d_82 = self.resnet.layer3[0].conv2
+        bn_83 = self.resnet.layer3[0].bn2
+        relu_84 = self.resnet.layer3[0].relu
+        conv2d_85 = self.resnet.layer3[0].conv3
+        bn_86 = self.resnet.layer3[0].bn3
+        conv2d_87_bn_88 = self.resnet.layer3[0].downsample
+        relu_89 = self.resnet.layer3[0].relu
+        out3 = bn_86(conv2d_85(relu_84(bn_83(conv2d_82(feat_map3)))))
+        out3 += conv2d_87_bn_88(
+            input_to_layer3  # Downsampling from the layer input
+        )
+        out3 = relu_89(out3)
+        # Remained part of the third layer
+        for i in range(1, len(self.resnet.layer3)):
+            out3 = self.resnet.layer3[i](out3)
+
+        # Currently only such architecture is supported
+        assert len(feature_maps) == 4
+
+        if self.only_encoder:
+            return self.avg_pool(out3).reshape(-1, 1024 * 4 * 4)
+
+        ############## DECODER ##############
+        out_seg, out_depth, out_rgb = self.decoder(out3, feature_maps)
+        return out_seg, out_depth, out_rgb
+
+
 class QuestionLstmEncoder(nn.Module):
     def __init__(
         self,
@@ -319,7 +516,6 @@ class VqaLstmCnnAttentionModel(nn.Module):
     def forward(
         self, images: Tensor, questions: Tensor
     ) -> Tuple[Tensor, Tensor]:
-
         N, T, _, _, _ = images.size()
         # bs x 5 x 3 x 256 x 256
         img_feats = self.cnn(
@@ -421,8 +617,8 @@ class NavPlannerControllerModel(nn.Module):
 
         controller_kwargs = {
             "input_dim": planner_rnn_image_feat_dim
-            + planner_rnn_action_embed_dim
-            + planner_rnn_hidden_dim,
+                         + planner_rnn_action_embed_dim
+                         + planner_rnn_hidden_dim,
             "hidden_dims": controller_fc_dims,
             "output_dim": 2,
             "add_sigmoid": 0,
@@ -440,7 +636,6 @@ class NavPlannerControllerModel(nn.Module):
         controller_actions_in: Tensor,
         controller_action_lengths: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor]:
-
         N_p, T_p, _ = planner_img_feats.size()
 
         planner_img_feats = self.cnn_fc_layer(planner_img_feats)
@@ -457,14 +652,14 @@ class NavPlannerControllerModel(nn.Module):
         )
 
         planner_hidden_index = planner_hidden_index[
-            :, : controller_action_lengths.max()
-        ]
+                               :, : controller_action_lengths.max()
+                               ]
         controller_img_feats = controller_img_feats[
-            :, : controller_action_lengths.max()
-        ]
+                               :, : controller_action_lengths.max()
+                               ]
         controller_actions_in = controller_actions_in[
-            :, : controller_action_lengths.max()
-        ]
+                                :, : controller_action_lengths.max()
+                                ]
 
         N_c, T_c, _ = controller_img_feats.size()
 
@@ -472,8 +667,8 @@ class NavPlannerControllerModel(nn.Module):
 
         planner_hidden_index = (
             planner_hidden_index.contiguous()
-            .view(N_p, planner_hidden_index.size(1), 1)
-            .repeat(1, 1, planner_states.size(2))
+                .view(N_p, planner_hidden_index.size(1), 1)
+                .repeat(1, 1, planner_states.size(2))
         )
 
         controller_hidden_in = planner_states.gather(
@@ -522,7 +717,6 @@ class NavPlannerControllerModel(nn.Module):
     def controller_step(
         self, img_feats: Tensor, actions_in: Tensor, hidden_in: Tensor
     ) -> Tensor:
-
         img_feats = self.cnn_fc_layer(img_feats)
         actions_embed = self.planner_nav_rnn.action_embed(actions_in)
 

@@ -7,11 +7,11 @@ TORCH_GPU_ID: 0
 
 DATASET_PATH: "data/datasets/eqa/eqa_cnn_pretrain/{split}/{split}.db"
 
-EVAL_CKPT_PATH_DIR: "data/eqa/eqa_cnn_pretrain/checkpoints/epoch_5.ckpt"
+EVAL_CKPT_PATH_DIR: "data/eqa/eqa_cnn_pretrain/checkpoints/resnet101/epoch_5.ckpt"
 
-CHECKPOINT_FOLDER: "data/eqa/eqa_cnn_pretrain/checkpoints"
-TENSORBOARD_DIR: "data/eqa/eqa_cnn_pretrain/tb"
-RESULTS_DIR: "data/eqa/eqa_cnn_pretrain/results/{split}/{type}"
+CHECKPOINT_FOLDER: "data/eqa/eqa_cnn_pretrain/checkpoints/resnet101"
+TENSORBOARD_DIR: "data/eqa/eqa_cnn_pretrain/tb/resnet101"
+RESULTS_DIR: "data/eqa/eqa_cnn_pretrain/results/resnet101/{split}/{type}"
 OUTPUT_LOG_DIR: data/eqa/eqa_cnn_pretrain/logs
 
 LOG_METRICS: True
@@ -25,7 +25,7 @@ FORCE_TORCH_SINGLE_THREADED: True
 IL:
   EQACNNPretrain:
     # params
-    max_epochs: 5
+    max_epochs: 300
     batch_size: 20
-    lr: 1e-3
-    model: "multitask_cnn" # "resnet101" or "multitask_cnn" are supported for now
+    lr: 1e-5
+    model: "resnet101" # "resnet101" or "multitask_cnn" are supported for now

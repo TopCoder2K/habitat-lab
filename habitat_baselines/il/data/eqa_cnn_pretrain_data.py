@@ -18,7 +18,6 @@ class EQACNNPretrainDataset(Dataset):
     def __init__(self, config, mode="train"):
         """
         Args:
-            env (habitat.Env): Habitat environment
             config: Config
             mode: 'train'/'val'
         """

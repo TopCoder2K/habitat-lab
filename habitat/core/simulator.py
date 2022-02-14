@@ -227,8 +227,8 @@ class ShortestPathPoint:
 
 
 class Simulator:
-    r"""Basic simulator class for habitat. New simulators to be added to habtiat
-    must derive from this class and implement the abstarct methods.
+    r"""Basic simulator class for habitat. New simulators to be added to
+    habitat must derive from this class and implement the abstract methods.
     """
     habitat_config: Config
 

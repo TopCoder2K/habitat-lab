@@ -146,4 +146,8 @@ class BaselineRegistry(Registry):
         return cls._get_impl("obs_transformer", name)
 
 
+# Singleton.__call__() -> checks creation -> if not created,
+# then type.__call__():
+#     instance = BaselineRegistry.__new__(), instance.__init__();
+# then adds to Singleton._instances and returns an instance of BaselineRegistry
 baseline_registry = BaselineRegistry()

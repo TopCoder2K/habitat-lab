@@ -9,7 +9,7 @@ r"""This module defines various ObservationTransformers that can be used
 to transform the output of the simulator before they are fed into the
 policy of the neural network. This can include various useful preprocessing
 including faking a semantic sensor using RGB input and MaskRCNN or faking
-a depth sensor using RGB input. You can also stich together multiple sensors.
+a depth sensor using RGB input. You can also stitch together multiple sensors.
 This code runs on the batched of inputs to these networks efficiently.
 ObservationTransformer all run as nn.modules and can be used for encoders or
 any other neural networks preprocessing steps.

@@ -42,9 +42,13 @@ def main():
 
 def execute_exp(config: Config, run_type: str) -> None:
     r"""This function runs the specified config with the specified runtype
+
     Args:
-    config: Habitat.config
-    runtype: str {train or eval}
+        config: Habitat.config
+        run_type: "train" or "eval"
+
+    Returns:
+        None.
     """
     random.seed(config.TASK_CONFIG.SEED)
     np.random.seed(config.TASK_CONFIG.SEED)
@@ -67,7 +71,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
 
     Args:
         exp_config: path to config file.
-        run_type: "train" or "eval.
+        run_type: "train" or "eval".
         opts: list of strings of additional config options.
 
     Returns:

@@ -17,7 +17,9 @@ from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.il.data.eqa_cnn_pretrain_data import (
     EQACNNPretrainDataset,
 )
-from habitat_baselines.il.models.models import MultitaskCNN
+
+from habitat_baselines.il.models.models import MultitaskCNN, MultitaskResNet101
+
 from habitat_baselines.utils.visualizations.utils import (
     save_depth_results,
     save_rgb_results,
@@ -79,7 +81,8 @@ class EQACNNPretrainTrainer(BaseILTrainer):
         save_depth_results(gt_depth[0], pred_depth[0], path)
 
     def train(self) -> None:
-        r"""Main method for pre-training Encoder-Decoder Feature Extractor for EQA.
+        r"""Main method for pre-training Encoder-Decoder Feature Extractor for
+        EQA.
 
         Returns:
             None
@@ -100,7 +103,12 @@ class EQACNNPretrainTrainer(BaseILTrainer):
             )
         )
 
-        model = MultitaskCNN()
+        if config.IL.EQACNNPretrain.model == "multitask_cnn":
+            print("CNN trainer uses basic CNN from Das et al.")
+            model = MultitaskCNN()
+        else:
+            print("CNN trainer uses ResNet101 based CNN")
+            model = MultitaskResNet101()
         model.train().to(self.device)
 
         optim = torch.optim.Adam(
@@ -113,6 +121,8 @@ class EQACNNPretrainTrainer(BaseILTrainer):
         seg_loss = torch.nn.CrossEntropyLoss()
 
         epoch, t = 1, 0
+        seg_coef = float("resnet" in config.IL.EQACNNPretrain.model) * 0.1
+        ae_coef, depth_coef = 10, 10
         with TensorboardWriter(
             config.TENSORBOARD_DIR, flush_secs=self.flush_secs
         ) as writer:
@@ -137,7 +147,7 @@ class EQACNNPretrainTrainer(BaseILTrainer):
                     l2 = ae_loss(pred_rgb, gt_rgb)
                     l3 = depth_loss(pred_depth, gt_depth)
 
-                    loss = l1 + (10 * l2) + (10 * l3)
+                    loss = (seg_coef * l1) + (ae_coef * l2) + (depth_coef * l3)
 
                     avg_loss += loss.item()
 
@@ -213,7 +223,10 @@ class EQACNNPretrainTrainer(BaseILTrainer):
             )
         )
 
-        model = MultitaskCNN()
+        if config.IL.EQACNNPretrain.model == "multitask_cnn":
+            model = MultitaskCNN(checkpoint_path=checkpoint_path)
+        else:
+            model = MultitaskResNet101(checkpoint_path=checkpoint_path)
 
         state_dict = torch.load(checkpoint_path)
         model.load_state_dict(state_dict)
@@ -229,6 +242,8 @@ class EQACNNPretrainTrainer(BaseILTrainer):
         avg_l1 = 0.0
         avg_l2 = 0.0
         avg_l3 = 0.0
+        seg_coef = float("resnet" in config.IL.EQACNNPretrain.model) * 0.1
+        ae_coef, depth_coef = 10, 10
 
         with torch.no_grad():
             for batch in eval_loader:
@@ -244,7 +259,7 @@ class EQACNNPretrainTrainer(BaseILTrainer):
                 l2 = ae_loss(pred_rgb, gt_rgb)
                 l3 = depth_loss(pred_depth, gt_depth)
 
-                loss = l1 + (10 * l2) + (10 * l3)
+                loss = (seg_coef * l1) + (ae_coef * l2) + (depth_coef * l3)
 
                 avg_loss += loss.item()
                 avg_l1 += l1.item()
