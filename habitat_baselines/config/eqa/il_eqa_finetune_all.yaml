@@ -1,3 +1,5 @@
+# EXPERIMENTAL
+
 BASE_TASK_CONFIG_PATH: "configs/tasks/eqa_mp3d.yaml"
 TRAINER_NAME: "eqa_finetune_all"
 

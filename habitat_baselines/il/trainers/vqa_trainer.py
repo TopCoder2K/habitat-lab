@@ -7,6 +7,9 @@
 import math
 import os
 import time
+import json
+
+from typing import Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -18,7 +21,9 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.il.data.data import EQADataset
 from habitat_baselines.il.metrics import VqaMetric
-from habitat_baselines.il.models.models import VqaLstmCnnAttentionModel
+from habitat_baselines.il.models.models import (
+    VqaLstmCnnAttentionModel, build_mdetr
+)
 from habitat_baselines.utils.common import img_bytes_2_np_array
 from habitat_baselines.utils.visualizations.utils import save_vqa_image_results
 
@@ -41,6 +46,7 @@ class VQATrainer(BaseILTrainer):
 
         if config is not None:
             logger.info(f"config: {config}")
+        logger.info(f"VQATrainer's DEVICE: {self.device}")
 
     def _make_results_dir(self):
         r"""Makes directory for saving VQA eval results."""
@@ -51,7 +57,7 @@ class VQATrainer(BaseILTrainer):
         self,
         ckpt_idx: int,
         episode_ids: torch.Tensor,
-        questions: torch.Tensor,
+        questions: Tuple[str],
         images: torch.Tensor,
         pred_scores: torch.Tensor,
         gt_answers: torch.Tensor,
@@ -63,11 +69,10 @@ class VQATrainer(BaseILTrainer):
         Args:
             ckpt_idx: idx of checkpoint being evaluated
             episode_ids: episode ids of batch
-            questions: input questions to model
+            questions: input questions to model (in natural form)
             images: images' tensor containing input frames
             pred_scores: model prediction scores
             gt_answers: ground truth answers
-            ground_truth: ground truth answer
             q_vocab_dict: Question VocabDict
             ans_vocab_dict: Answer VocabDict
 
@@ -80,13 +85,13 @@ class VQATrainer(BaseILTrainer):
         gt_answer = gt_answers[0]
         scores = pred_scores[0]
 
-        q_string = q_vocab_dict.token_idx_2_string(question)
+        # q_string = q_vocab_dict.token_idx_2_string(question)
 
         _, index = scores.max(0)
         pred_answer = sorted(ans_vocab_dict.word2idx_dict.keys())[index]
         gt_answer = sorted(ans_vocab_dict.word2idx_dict.keys())[gt_answer]
 
-        logger.info("Question: {}".format(q_string))
+        logger.info("Question: {}".format(question))
         logger.info("Predicted answer: {}".format(pred_answer))
         logger.info("Ground-truth answer: {}".format(gt_answer))
 
@@ -99,7 +104,7 @@ class VQATrainer(BaseILTrainer):
         )
 
         save_vqa_image_results(
-            images, q_string, pred_answer, gt_answer, result_path
+            images, question, pred_answer, gt_answer, result_path
         )
 
     def train(self) -> None:
@@ -136,21 +141,64 @@ class VQATrainer(BaseILTrainer):
 
         q_vocab_dict, ans_vocab_dict = vqa_dataset.get_vocab_dicts()
 
-        model_kwargs = {
-            "q_vocab": q_vocab_dict.word2idx_dict,
-            "ans_vocab": ans_vocab_dict.word2idx_dict,
-            "eqa_cnn_pretrain_ckpt_path": config.EQA_CNN_PRETRAIN_CKPT_PATH,
-            "freeze_encoder": config.IL.VQA.freeze_encoder,
-        }
+        if config.IL.VQA.model == "lstm_based":
+            # TODO: incorporate tokenization inside the lstm-based model
+            model_kwargs = {
+                "q_vocab": q_vocab_dict.word2idx_dict,
+                "ans_vocab": ans_vocab_dict.word2idx_dict,
+                "freeze_encoder": config.IL.VQA.freeze_encoder,
+                "eqa_cnn_pretrain_ckpt_path": config.EQA_CNN_PRETRAIN_CKPT_PATH
+            }
+            model = VqaLstmCnnAttentionModel(**model_kwargs)
+            optimizer = torch.optim.Adam(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                lr=float(config.IL.VQA.lr),
+            )
+        else:
+            model, qa_criterion = build_mdetr(
+                self.device, config, len(ans_vocab_dict.word2idx_dict)
+            )
 
-        model = VqaLstmCnnAttentionModel(**model_kwargs)
+            checkpoint_path = config.TRAIN_CKPT_PATH
+            logger.info(f"Loading MDETR from {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            # Correcting head mismatch
+            del checkpoint["model"]["answer_head.weight"]
+            del checkpoint["model"]["answer_head.bias"]
+            model.load_state_dict(checkpoint["model"], strict=False)
 
-        lossFn = torch.nn.CrossEntropyLoss()
+            param_dicts = [
+                {
+                    "params": [
+                        p
+                        for n, p in model.named_parameters()
+                        if "backbone" not in n and "text_encoder" not in n
+                        and p.requires_grad
+                    ]
+                },
+                {
+                    "params": [
+                        p
+                        for n, p in model.named_parameters()
+                        if "backbone" in n and p.requires_grad
+                    ],
+                    "lr": float(config.IL.CNN.lr_backbone),
+                },
+                {
+                    "params": [
+                        p
+                        for n, p in model.named_parameters()
+                        if "text_encoder" in n and p.requires_grad
+                    ],
+                    "lr": float(config.IL.TRANSFORMER.text_encoder_lr),
+                },
+            ]
+            optimizer = torch.optim.AdamW(
+                param_dicts, lr=float(config.IL.MDETR.lr),
+                weight_decay=float(config.IL.VQA.weight_decay)
+            )
 
-        optim = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=float(config.IL.VQA.lr),
-        )
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         metrics = VqaMetric(
             info={"split": "train"},
@@ -173,8 +221,9 @@ class VQATrainer(BaseILTrainer):
         logger.info(model)
         model.train().to(self.device)
 
-        if config.IL.VQA.freeze_encoder:
-            model.cnn.eval()
+        if config.IL.CNN.freeze_encoder:
+            model.cnn.eval() if config.IL.VQA.model == "lstm_based" \
+                else model.backbone.eval()
 
         with TensorboardWriter(
             config.TENSORBOARD_DIR, flush_secs=self.flush_secs
@@ -183,15 +232,35 @@ class VQATrainer(BaseILTrainer):
                 start_time = time.time()
                 for batch in train_loader:
                     t += 1
-                    _, questions, answers, frame_queue = batch
-                    optim.zero_grad()
+                    episode_ids, questions, answers, frame_queue = batch
+                    optimizer.zero_grad()
+                    # cur_episode_id = episode_ids[0]
+                    # print(cur_episode_id, vqa_dataset.episodes[cur_episode_id].question)
+                    # answer_text = vqa_dataset.episodes[cur_episode_id].question.answer_text
+                    # answer_token = ans_vocab_dict.word2idx(answer_text)
+                    # print(questions[0], answers[0], answer_token)
+                    # assert answers[0] == answer_token, "answer tokens are not equal!"
+                    # print(q_vocab_dict.token_idx_2_string(questions[0]), ans_vocab_dict.token_idx_2_string([answers[0], ]), ans_vocab_dict.token_idx_2_string([answer_token]))
+                    # print("DEBUG\n", sorted(ans_vocab_dict.word2idx_dict.keys())[answer_token], "\nDEBUG\n")
+                    # raise RuntimeError
 
-                    questions = questions.to(self.device)
+                    # questions = questions.to(self.device)
                     answers = answers.to(self.device)
                     frame_queue = frame_queue.to(self.device)
 
-                    scores, _ = model(frame_queue, questions)
-                    loss = lossFn(scores, answers)
+                    if config.IL.VQA.model == "lstm_based":
+                        scores, _ = model(frame_queue, questions)
+                    else:
+                        memory_cache = model(
+                            frame_queue, questions, encode_and_save=True
+                        )
+                        outputs, _ = model(
+                            frame_queue, questions, encode_and_save=False,
+                            memory_cache=memory_cache
+                        )
+                        scores = outputs["pred_answer"]
+
+                    loss = loss_fn(scores, answers)
 
                     # update metrics
                     accuracy, ranks = metrics.compute_ranks(
@@ -200,7 +269,7 @@ class VQATrainer(BaseILTrainer):
                     metrics.update([loss.item(), accuracy, ranks, 1.0 / ranks])
 
                     loss.backward()
-                    optim.step()
+                    optimizer.step()
 
                     (
                         metrics_loss,
@@ -310,19 +379,35 @@ class VQATrainer(BaseILTrainer):
 
         q_vocab_dict, ans_vocab_dict = vqa_dataset.get_vocab_dicts()
 
-        model_kwargs = {
-            "q_vocab": q_vocab_dict.word2idx_dict,
-            "ans_vocab": ans_vocab_dict.word2idx_dict,
-            "eqa_cnn_pretrain_ckpt_path": config.EQA_CNN_PRETRAIN_CKPT_PATH,
-        }
-        model = VqaLstmCnnAttentionModel(**model_kwargs)
+        if config.IL.VQA.model == "lstm_based":
+            # TODO: incorporate tokenization inside the lstm-based model
+            model_kwargs = {
+                "q_vocab": q_vocab_dict.word2idx_dict,
+                "ans_vocab": ans_vocab_dict.word2idx_dict,
+                "eqa_cnn_pretrain_ckpt_path": config.EQA_CNN_PRETRAIN_CKPT_PATH
+            }
+            model = VqaLstmCnnAttentionModel(**model_kwargs)
+            state_dict = torch.load(
+                checkpoint_path, map_location={"cuda:0": "cpu"}
+            )
+            model.load_state_dict(state_dict)
+            model.cnn.eval()
+            model.to(self.device)
+        else:
+            model, _ = build_mdetr(
+                self.device, config, len(ans_vocab_dict.word2idx_dict)
+            )
+            # logger.info(f"Loading MDETR from {checkpoint_path}")
+            # checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            # model.load_state_dict(checkpoint["model"])
+            model.eval()
+            model.to(self.device)
 
-        state_dict = torch.load(
-            checkpoint_path, map_location={"cuda:0": "cpu"}
-        )
-        model.load_state_dict(state_dict)
+            # with open("data/eqa/vqa/vqa2_answer2id.json", "r") as f:
+            #     answer2id = json.load(f)
+            # id2answer = {n_w: w for w, n_w in answer2id.items()}
 
-        lossFn = torch.nn.CrossEntropyLoss()
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         t = 0
 
@@ -330,10 +415,6 @@ class VQATrainer(BaseILTrainer):
         avg_accuracy = 0.0
         avg_mean_rank = 0.0
         avg_mean_reciprocal_rank = 0.0
-
-        model.eval()
-        model.cnn.eval()
-        model.to(self.device)
 
         metrics = VqaMetric(
             info={"split": "val"},
@@ -345,17 +426,51 @@ class VQATrainer(BaseILTrainer):
             ],
             log_json=os.path.join(config.OUTPUT_LOG_DIR, "eval.json"),
         )
+
+        # Intersection calculation
+        # gen_word_cnt = {}
+        # for word in ans_vocab_dict.word2idx_dict.keys():
+        #     if word in answer2id and word not in gen_word_cnt:
+        #         gen_word_cnt[word] = 1
+        # print(f"mdetr has: {len(answer2id)}, eqa has: {len(ans_vocab_dict.word2idx_dict)}, general intersection: {len(gen_word_cnt)}")
+
+        eval_word_cnt = {}
         with torch.no_grad():
+            # accuracy_total = 0.
+            # accuracy_common = 0.
+            # common_ans_cnt = 0
             for batch in eval_loader:
                 t += 1
                 episode_ids, questions, answers, frame_queue = batch
-                questions = questions.to(self.device)
+                # questions = questions.to(self.device)
                 answers = answers.to(self.device)
                 frame_queue = frame_queue.to(self.device)
 
-                scores, _ = model(frame_queue, questions)
+                if config.IL.VQA.model == "lstm_based":
+                    scores, _ = model(frame_queue, questions)
+                else:
+                    memory_cache = model(
+                        frame_queue, questions, encode_and_save=True
+                    )
+                    outputs, _ = model(
+                        frame_queue, questions, encode_and_save=False,
+                        memory_cache=memory_cache
+                    )
+                    scores = outputs["pred_answer"]
+                    # answer_ids = torch.argmax(scores, dim=-1)
+                    # accuracy = 0.
+                    # for i, ind in enumerate(answer_ids):
+                    #     answer_text = vqa_dataset.episodes[episode_ids[i]].question.answer_text
+                    #     accuracy += (id2answer[ind.item()] == answer_text)
+                    #     accuracy_total += (id2answer[ind.item()] == answer_text)
+                    #     if answer_text in answer2id:
+                    #         accuracy_common += (id2answer[ind.item()] == answer_text)
+                    #         common_ans_cnt += 1
+                    #         if answer_text not in eval_word_cnt:
+                    #             eval_word_cnt[answer_text] = 1
+                    # accuracy /= len(answer_ids)
 
-                loss = lossFn(scores, answers)
+                loss = loss_fn(scores, answers)
 
                 accuracy, ranks = metrics.compute_ranks(
                     scores.data.cpu(), answers
@@ -400,6 +515,10 @@ class VQATrainer(BaseILTrainer):
         avg_accuracy /= num_batches
         avg_mean_rank /= num_batches
         avg_mean_reciprocal_rank /= num_batches
+        # print("Correct answers total:", accuracy_total, "correct common:", accuracy_common, "total common", common_ans_cnt)
+        # print(f"Eval dict intersection: {len(eval_word_cnt)}")
+        # accuracy_total /= len(vqa_dataset)
+        # accuracy_common /= common_ans_cnt
 
         writer.add_scalar("avg val loss", avg_loss, checkpoint_index)
         writer.add_scalar("avg val accuracy", avg_accuracy, checkpoint_index)
@@ -411,7 +530,9 @@ class VQATrainer(BaseILTrainer):
         )
 
         logger.info("Average loss: {:.2f}".format(avg_loss))
-        logger.info("Average accuracy: {:.2f}".format(avg_accuracy))
+        logger.info("Average accuracy: {:.4f}".format(avg_accuracy))
+        # logger.info("Average total accuracy: {:.4f}".format(accuracy_total))
+        # logger.info("Average common accuracy: {:.4f}".format(accuracy_common))
         logger.info("Average mean rank: {:.2f}".format(avg_mean_rank))
         logger.info(
             "Average mean reciprocal rank: {:.2f}".format(

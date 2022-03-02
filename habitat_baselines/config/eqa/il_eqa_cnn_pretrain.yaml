@@ -22,6 +22,7 @@ EVAL_SAVE_RESULTS_INTERVAL: 50
 # this improves performance considerably
 FORCE_TORCH_SINGLE_THREADED: True
 
+# TODO: change multitask_cnn on multitask_das_cnn
 IL:
   EQACNNPretrain:
     # params

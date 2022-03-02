@@ -35,3 +35,4 @@ IL:
     batch_size: 20
     lr: 3e-4
     freeze_encoder: False
+    model: "lstm_based"  # "lstm_based" or "transformer_based" are supported

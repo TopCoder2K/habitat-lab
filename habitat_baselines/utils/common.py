@@ -536,10 +536,12 @@ def valid_sample(sample: Optional[Any]) -> bool:
         and not sample.get("__bad__", False)
     )
 
-
+# TODO: do the types of input and output correct?
+#  x: Tuple [int, torch.Tensor, torch.Tensor, bytes],
+#  -> Tuple[int, torch.Tensor, torch.Tensor, np.ndarray]
 def img_bytes_2_np_array(
-    x: Tuple[int, torch.Tensor, bytes]
-) -> Tuple[int, torch.Tensor, bytes, np.ndarray]:
+    x: Tuple[int, Union[torch.Tensor, str], Union[torch.Tensor, str], bytes]
+) -> Tuple[int, Union[torch.Tensor, str], Union[torch.Tensor, str], np.ndarray]:
     """Mapper function to convert image bytes in webdataset sample to numpy
     arrays.
     Args:

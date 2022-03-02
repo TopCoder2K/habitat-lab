@@ -157,13 +157,13 @@ class EQADataset(wds.Dataset):
                     episode_id
                 ].episode_id
 
-                question = self.episodes[episode_id].question.question_tokens
-                if len(question) < self.max_q_len:
-                    diff = self.max_q_len - len(question)
-                    for _ in range(diff):
-                        question.append(0)
+                question = self.episodes[episode_id].question.question_text
+                # if len(question) < self.max_q_len:
+                #     diff = self.max_q_len - len(question)
+                #     for _ in range(diff):
+                #         question.append(0)
 
-                current_sample["question"] = torch.LongTensor(question)
+                current_sample["question"] = question
                 current_sample["answer"] = self.ans_vocab.word2idx(
                     self.episodes[episode_id].question.answer_text
                 )

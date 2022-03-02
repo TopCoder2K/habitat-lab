@@ -1,0 +1,74 @@
+BASE_TASK_CONFIG_PATH: "configs/tasks/eqa_mp3d.yaml"
+TRAINER_NAME: "vqa"
+
+ENV_NAME: "VQAILEnv"
+SIMULATOR_GPU_ID: 0
+TORCH_GPU_ID: 0
+
+ONLY_VQA_TASK: False # if True, only last `num_frames` will be saved to disk.
+#if False, all frames for each episode are saved to disk (for NAV task later)
+DATASET_PATH: "data/datasets/eqa/frame_dataset/{split}/{split}.db"
+FRAME_DATASET_PATH: "data/datasets/eqa/frame_dataset/{split}"
+TRAIN_CKPT_PATH: "data/eqa/vqa/checkpoints/transformer/3875_BEST_checkpoint.pth"
+EVAL_CKPT_PATH_DIR: "data/eqa/vqa/checkpoints/transformer/3875_BEST_checkpoint.pth"
+EQA_CNN_PRETRAIN_CKPT_PATH: "data/eqa/eqa_cnn_pretrain/checkpoints/epoch_?.ckpt"
+
+SENSORS: ["RGB_SENSOR"]
+CHECKPOINT_FOLDER: "data/eqa/vqa/checkpoints/transformer"
+TENSORBOARD_DIR: "data/eqa/vqa/tb/transformer"
+RESULTS_DIR: "data/eqa/vqa/results/{split}/transformer"
+
+LOG_METRICS: True
+OUTPUT_LOG_DIR: "data/eqa/vqa/logs/transformer"
+LOG_INTERVAL: 100
+EVAL_SAVE_RESULTS: True
+EVAL_SAVE_RESULTS_INTERVAL: 10
+
+# Force PyTorch to be single threaded as
+# this improves performance considerably
+FORCE_TORCH_SINGLE_THREADED: True
+
+IL:
+  VQA:
+    # vqa params
+    num_frames: 5
+    max_epochs: 50
+    batch_size: 1
+    model: "transformer_based"  # "lstm_based" or "transformer_based" are supported
+    weight_decay: 1e-4
+
+  MDETR:
+    # MDETR params
+    lr: 1e-4
+    num_queries: 100
+    aux_loss: False
+    contrastive_loss_hdim: 64
+    contrastive_loss: False  # Whether to add contrastive loss
+    contrastive_align_loss: False  # Whether to add contrastive alignment loss
+    split_qa_heads: False  # Whether to use a separate head per question type in vqa
+    no_detection: True  # Whether to train the detector
+
+  CNN:
+    # backbone params
+    cnn_model: "resnet101"  # "multitask_das_cnn", "unet-resnet101", "resnet101"
+    freeze_encoder: False  # backbone's encoder
+    lr_backbone: 1e-5
+    position_embedding: "sine"
+    masks: False
+    hidden_dim: 256  # Size of the embeddings (dimension of the transformer)
+    dilation: False  # If true, we replace stride with dilation in the last convolutional block (DC5)
+
+  TRANSFORMER:
+    # transformer params
+    text_encoder_lr: 5e-5
+    d_model: 256
+    nheads: 8
+    enc_layers: 6
+    dec_layers: 6
+    dim_feedforward: 2048
+    dropout: 0.1
+    activation: "relu"
+    text_encoder_type: "roberta-base"
+    freeze_text_encoder: False
+
+

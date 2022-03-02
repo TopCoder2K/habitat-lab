@@ -137,7 +137,7 @@ class BaseTrainer:
     ) -> None:
         raise NotImplementedError
 
-    def save_checkpoint(self, file_name) -> None:
+    def save_checkpoint(self, state_dict, file_name) -> None:
         raise NotImplementedError
 
     def load_checkpoint(self, checkpoint_path, *args, **kwargs) -> Dict:
@@ -269,7 +269,7 @@ class BaseRLTrainer(BaseTrainer):
         """
         raise NotImplementedError
 
-    def save_checkpoint(self, file_name) -> None:
+    def save_checkpoint(self, state_dict, file_name) -> None:
         raise NotImplementedError
 
     def load_checkpoint(self, checkpoint_path, *args, **kwargs) -> Dict:

@@ -182,7 +182,12 @@ class EQACNNPretrainTrainer(BaseILTrainer):
                 print("-----------------------------------------")
 
                 self.save_checkpoint(
-                    model.state_dict(), "epoch_{}.ckpt".format(epoch)
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": optim.state_dict(),
+                        "epoch": epoch
+                    },
+                    "epoch_{}.ckpt".format(epoch)
                 )
 
                 epoch += 1
@@ -225,11 +230,13 @@ class EQACNNPretrainTrainer(BaseILTrainer):
 
         if config.IL.EQACNNPretrain.model == "multitask_cnn":
             model = MultitaskCNN(checkpoint_path=checkpoint_path)
-        else:
+        elif config.IL.EQACNNPretrain.model == "resnet101":
             model = MultitaskResNet101(checkpoint_path=checkpoint_path)
+        else:
+            assert False, f"Don't know CNN {config.IL.EQACNNPretrain.model}"
 
         state_dict = torch.load(checkpoint_path)
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict["model"])
 
         model.to(self.device).eval()
 

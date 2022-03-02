@@ -81,11 +81,11 @@ class BaseILTrainer(BaseTrainer):
         """
         raise NotImplementedError
 
-    def save_checkpoint(self, state_dict: OrderedDict, file_name: str) -> None:
+    def save_checkpoint(self, state_dict: Dict, file_name: str) -> None:
         r"""Save checkpoint with specified name.
 
         Args:
-            state_dict: model's state_dict
+            state_dict: model's and optimizer's state_dicts, auxilary info
             file_name: file name for checkpoint
 
         Returns:
