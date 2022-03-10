@@ -328,7 +328,12 @@ class VQATrainer(BaseILTrainer):
                 print("-----------------------------------------")
 
                 self.save_checkpoint(
-                    model.state_dict(), "epoch_{}.ckpt".format(epoch)
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "epoch": epoch,
+                    },
+                    "epoch_{}.ckpt".format(epoch)
                 )
 
                 epoch += 1
@@ -397,9 +402,12 @@ class VQATrainer(BaseILTrainer):
             model, _ = build_mdetr(
                 self.device, config, len(ans_vocab_dict.word2idx_dict)
             )
-            # logger.info(f"Loading MDETR from {checkpoint_path}")
-            # checkpoint = torch.load(checkpoint_path, map_location="cpu")
-            # model.load_state_dict(checkpoint["model"])
+            logger.info(f"Loading MDETR from {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            # TODO: delete deletion or ?
+            # del checkpoint["model"]["answer_head.weight"]
+            # del checkpoint["model"]["answer_head.bias"]
+            model.load_state_dict(checkpoint["model"], strict=False)
             model.eval()
             model.to(self.device)
 
@@ -434,7 +442,7 @@ class VQATrainer(BaseILTrainer):
         #         gen_word_cnt[word] = 1
         # print(f"mdetr has: {len(answer2id)}, eqa has: {len(ans_vocab_dict.word2idx_dict)}, general intersection: {len(gen_word_cnt)}")
 
-        eval_word_cnt = {}
+        # eval_word_cnt = {}
         with torch.no_grad():
             # accuracy_total = 0.
             # accuracy_common = 0.
