@@ -412,7 +412,6 @@ def build_backbone(args):
             "freeze_encoder": args.IL.CNN.freeze_encoder
         }
         model = MultitaskResNet101(**model_kwargs)
-        return model
     elif "resnet" in args.IL.CNN.cnn_model:
         position_embedding = build_position_encoding(args.IL.CNN)
         train_backbone = float(args.IL.CNN.lr_backbone) > 0
@@ -437,6 +436,10 @@ def build_backbone(args):
             )
         model = Joiner(backbone, position_embedding)
         model.num_channels = backbone.num_channels
-        return model
     else:
         assert False, f"Unknown cnn_model name: {args.IL.CNN.cnn_model}"
+
+    if args.IL.CNN.freeze_encoder:
+        for p in model.parameters():
+            p.requires_grad = False
+    return model

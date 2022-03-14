@@ -848,14 +848,8 @@ def build_mdetr(device, args, ans_vocab_size=None):
     qa_dataset = "vqa2"
 
     backbone = build_backbone(args)
-    if args.IL.CNN.freeze_encoder:
-        for p in backbone.parameters():
-            p.requires_grad = False
 
     transformer = build_transformer(args)
-    if args.IL.TRANSFORMER.freeze_text_encoder:
-        for p in backbone.parameters():
-            p.requires_grad = False
 
     model = MDETR(
         backbone,
