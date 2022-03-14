@@ -11,7 +11,7 @@ DATASET_PATH: "data/datasets/eqa/frame_dataset/{split}/{split}.db"
 FRAME_DATASET_PATH: "data/datasets/eqa/frame_dataset/{split}"
 TRAIN_CKPT_PATH: "data/eqa/vqa/mdetr_BEST_checkpoint.pth"
 # TODO: replace with data/eqa/vqa/checkpoints/transformer/3875_BEST_checkpoint.pth
-EVAL_CKPT_PATH_DIR: "data/eqa/vqa/mdetr_BEST_checkpoint.pth"
+EVAL_CKPT_PATH_DIR: "data/eqa/vqa/checkpoints/transformer"
 EQA_CNN_PRETRAIN_CKPT_PATH: "data/eqa/eqa_cnn_pretrain/checkpoints/epoch_?.ckpt"
 
 SENSORS: ["RGB_SENSOR"]
@@ -21,7 +21,7 @@ RESULTS_DIR: "data/eqa/vqa/results/{split}/transformer"
 
 LOG_METRICS: True
 OUTPUT_LOG_DIR: "data/eqa/vqa/logs/transformer"
-LOG_INTERVAL: 100
+LOG_INTERVAL: 1  # 100 was by default
 EVAL_SAVE_RESULTS: True
 EVAL_SAVE_RESULTS_INTERVAL: 10
 
@@ -34,13 +34,13 @@ IL:
     # vqa params
     num_frames: 5
     max_epochs: 50
-    batch_size: 1
+    batch_size: 20
     model: "transformer_based"  # "lstm_based" or "transformer_based" are supported
     weight_decay: 1e-4
 
   MDETR:
     # MDETR params
-    lr: 1e-4
+    lr: 7e-5
     num_queries: 100
     aux_loss: False
     contrastive_loss_hdim: 64
@@ -52,8 +52,8 @@ IL:
   CNN:
     # backbone params
     cnn_model: "resnet101"  # "multitask_das_cnn", "unet-resnet101", "resnet101"
-    freeze_encoder: False  # backbone's encoder
-    lr_backbone: 1e-5
+    freeze_encoder: True  # backbone's encoder
+    lr_backbone: 1.4e-5
     position_embedding: "sine"
     masks: False
     hidden_dim: 256  # Size of the embeddings (dimension of the transformer)
@@ -61,7 +61,7 @@ IL:
 
   TRANSFORMER:
     # transformer params
-    text_encoder_lr: 5e-5
+    text_encoder_lr: 7e-5
     d_model: 256
     nheads: 8
     enc_layers: 6
@@ -70,6 +70,6 @@ IL:
     dropout: 0.1
     activation: "relu"
     text_encoder_type: "roberta-base"
-    freeze_text_encoder: False
+    freeze_text_encoder: True
 
 
