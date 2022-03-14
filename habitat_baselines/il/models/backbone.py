@@ -414,7 +414,7 @@ def build_backbone(args):
         model = MultitaskResNet101(**model_kwargs)
     elif "resnet" in args.IL.CNN.cnn_model:
         position_embedding = build_position_encoding(args.IL.CNN)
-        train_backbone = float(args.IL.CNN.lr_backbone) > 0
+        train_backbone = not args.IL.CNN.freeze_encoder
         # TODO: do we need masks for segmentation?
         return_interm_layers = args.IL.CNN.masks
         # if args.backbone[: len("timm_")] == "timm_":
@@ -439,7 +439,4 @@ def build_backbone(args):
     else:
         assert False, f"Unknown cnn_model name: {args.IL.CNN.cnn_model}"
 
-    if args.IL.CNN.freeze_encoder:
-        for p in model.parameters():
-            p.requires_grad = False
     return model
