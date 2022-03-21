@@ -37,6 +37,7 @@ IL:
     batch_size: 20
     model: "transformer_based"  # "lstm_based" or "transformer_based" are supported
     weight_decay: 1e-4
+    lr_scheduler: "CosineAnnealingLR"
 
   MDETR:
     # MDETR params
@@ -64,11 +65,12 @@ IL:
     text_encoder_lr: 7e-5
     d_model: 256
     nheads: 8
-    enc_layers: 6
-    dec_layers: 6
+    enc_layers: 2
+    dec_layers: 2
     dim_feedforward: 2048
-    dropout: 0.1
-    activation: "relu"
+    dropout: 0.7
+    activation: "gelu"
+    pre_norm: True  # Whether to run LayerNorm in Transformer before going through the layer or not. TODO: should we use True?
     text_encoder_type: "roberta-base"
     freeze_text_encoder: True
 

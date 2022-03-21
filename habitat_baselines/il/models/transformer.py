@@ -41,7 +41,8 @@ class Transformer(nn.Module):
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
-        decoder_layer = TransformerDecoderLayer(d_model, nheads, dim_feedforward, dropout, activation, normalize_before)
+        # TODO: _ should we reimplement normalize_before in decoder?
+        decoder_layer = TransformerDecoderLayer(d_model, nheads, dim_feedforward, dropout, activation, normalize_before=False)
         decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(
             decoder_layer, num_decoder_layers, decoder_norm, return_intermediate=return_intermediate_dec
@@ -535,7 +536,7 @@ def build_transformer(args):
         dim_feedforward=args.IL.TRANSFORMER.dim_feedforward,
         dropout=float(args.IL.TRANSFORMER.dropout),
         activation=args.IL.TRANSFORMER.activation,
-        # normalize_before=args.pre_norm,
+        normalize_before=args.IL.TRANSFORMER.pre_norm,
         return_intermediate_dec=True,
         # pass_pos_and_query=args.pass_pos_and_query,
         text_encoder_type=args.IL.TRANSFORMER.text_encoder_type,

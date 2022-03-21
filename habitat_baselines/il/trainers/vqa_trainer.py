@@ -154,11 +154,38 @@ class VQATrainer(BaseILTrainer):
                 filter(lambda p: p.requires_grad, model.parameters()),
                 lr=float(config.IL.VQA.lr),
             )
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lambda lr: lr  # lr isn't changed
+            )
         else:
             model, qa_criterion = build_mdetr(
                 self.device, config, len(ans_vocab_dict.word2idx_dict)
             )
+            # Print total, backbone and text encoder trainable params
+            print(
+                "Total number of trainable params:\n",
+                sum(p.numel() for p in model.parameters() if p.requires_grad),
+                sep=""
+            )
+            print(
+                "Amongst them for the visual part:\n",
+                sum(
+                    p.numel()
+                    for n, p in model.named_parameters()
+                    if p.requires_grad and "backbone" in n
+                ),
+                sep="")
+            print(
+                "And for the text part:\n",
+                sum(
+                    p.numel()
+                    for n, p in model.named_parameters()
+                    if p.requires_grad and "text_encoder" in n
+                ),
+                sep=""
+            )
 
+            # Load checkpoint
             checkpoint_path = config.TRAIN_CKPT_PATH
             logger.info(f"Loading MDETR from {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -197,6 +224,13 @@ class VQATrainer(BaseILTrainer):
                 param_dicts, lr=float(config.IL.MDETR.lr),
                 weight_decay=float(config.IL.VQA.weight_decay)
             )
+            lr_scheduler_name = config.IL.VQA.lr_scheduler
+            if lr_scheduler_name == "CosineAnnealingLR":
+                lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=200, eta_min=float(config.IL.MDETR.lr)/100
+                )
+            else:
+                assert False, f"Unknown lr_scheduler {lr_scheduler_name}"
 
         loss_fn = torch.nn.CrossEntropyLoss()
 
@@ -270,6 +304,7 @@ class VQATrainer(BaseILTrainer):
 
                     loss.backward()
                     optimizer.step()
+                    lr_scheduler.step()  # Especially was put here
 
                     (
                         metrics_loss,
