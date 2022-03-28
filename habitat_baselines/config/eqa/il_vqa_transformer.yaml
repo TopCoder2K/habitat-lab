@@ -32,11 +32,11 @@ IL:
   VQA:
     # vqa params
     num_frames: 5
-    max_epochs: 40
+    max_epochs: 80
     batch_size: 20
     model: "transformer_based"  # "lstm_based" or "transformer_based" are supported
     weight_decay: 1e-4
-    lr_scheduler: "CosineAnnealingLR"
+    lr_scheduler: "None"
 
   MDETR:
     # MDETR params
@@ -48,13 +48,13 @@ IL:
     contrastive_align_loss: False  # Whether to add contrastive alignment loss
     split_qa_heads: False  # Whether to use a separate head per question type in vqa
     no_detection: True  # Whether to train the detector
-    apply_dt_fixup: True  # Whether to apply DT-Fixup from https://arxiv.org/pdf/2012.15355.pdf
+    apply_dt_fixup: False  # Whether to apply DT-Fixup from https://arxiv.org/pdf/2012.15355.pdf
 
   CNN:
     # backbone params
     cnn_model: "resnet101"  # "multitask_das_cnn", "unet-resnet101", "resnet101"
-    freeze_encoder: True  # backbone's encoder
-    lr_backbone: 1.4e-5
+    freeze_encoder: False  # backbone's encoder
+    lr_backbone: 1.4e-7
     position_embedding: "sine"
     masks: False
     hidden_dim: 256  # Size of the embeddings (dimension of the transformer)
@@ -62,16 +62,16 @@ IL:
 
   TRANSFORMER:
     # transformer params
-    text_encoder_lr: 7e-5
+    text_encoder_lr: 7e-7
     d_model: 256
-    nheads: 2
-    enc_layers: 2
-    dec_layers: 2
+    nheads: 8
+    enc_layers: 6
+    dec_layers: 6
     dim_feedforward: 2048
-    dropout: 0.3
-    activation: "gelu"
-    pre_norm: True  # Whether to run LayerNorm in Transformer before going through the layer or not. TODO: should we use True?
+    dropout: 0.1
+    activation: "relu"
+    pre_norm: False  # Whether to run LayerNorm in Transformer before going through the layer or not. TODO: should we use True?
     text_encoder_type: "roberta-base"
-    freeze_text_encoder: True
+    freeze_text_encoder: False
 
 
