@@ -81,6 +81,9 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
+    def remove_enc_layer_norm(self):
+        self.encoder.disable_layer_norm()
+
     def forward(
         self,
         src=None,
@@ -103,7 +106,7 @@ class Transformer(nn.Module):
             pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
             # query_embed.shape = (num_queries + nb_heads, bs, 256)
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-            # mask.shape = (b, h * w)
+            # mask.shape = (bs, h * w)
             mask = mask.flatten(1)
 
             if self.CLS is not None:
@@ -128,7 +131,7 @@ class Transformer(nn.Module):
             device = src.device
             if isinstance(text[0], str):
                 # Encode the text
-                # tokenized --- dict{"input_inds": shape = (b, longest + 2), "attention_mask": shape = (b, longest + 2)}
+                # tokenized --- dict{"input_inds": shape = (bs, longest + 2), "attention_mask": shape = (bs, longest + 2)}
                 # attantion_mask zeros padded tokens
                 tokenized = self.tokenizer.batch_encode_plus(text, padding="longest", return_tensors="pt").to(device)
                 # encoded_text --- BaseModelOutputWithPoolingAndCrossAttentions, which has two attributes in
@@ -138,7 +141,7 @@ class Transformer(nn.Module):
                 # Transpose memory because pytorch's attention expects sequence first
                 text_memory = encoded_text.last_hidden_state.transpose(0, 1)
                 # Invert attention mask that we get from huggingface because its the opposite in pytorch transformer
-                # text_attention_mask.shape = (b, seq_length=max_seq_len+2)
+                # text_attention_mask.shape = (bs, seq_length=max_seq_len+2)
                 text_attention_mask = tokenized.attention_mask.ne(1).bool()
 
                 # Resize the encoder hidden states to be of the same d_model as the decoder
@@ -149,13 +152,13 @@ class Transformer(nn.Module):
                 text_attention_mask, text_memory_resized, tokenized = text
 
             # Concat on the sequence dimension
-            # src.shape = (h * w + seq_length, b, d_model=256)
+            # src.shape = (h * w + seq_length, bs, d_model=256)
             src = torch.cat([src, text_memory_resized], dim=0)
             # For mask, sequence dimension is second
-            # mask.shape = (b, h * w + seq_length)
+            # mask.shape = (bs, h * w + seq_length)
             mask = torch.cat([mask, text_attention_mask], dim=1)
             # Pad the pos_embed with 0 so that the addition will be a no-op for the text tokens
-            # pos_embed.shape = (h * w + seq_length, b, 2*num_pos_feats=256)
+            # pos_embed.shape = (h * w + seq_length, bs, 2*num_pos_feats=256)
             pos_embed = torch.cat([pos_embed, torch.zeros_like(text_memory_resized)], dim=0)
 
             img_memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
@@ -174,6 +177,7 @@ class Transformer(nn.Module):
                 "pos_embed": pos_embed,
                 "query_embed": query_embed,
                 "tokenized": tokenized,
+                "encoder_attn_max_input": torch.maximum(src, src + pos_embed),
             }
             return memory_cache
 
@@ -208,6 +212,10 @@ class TransformerEncoder(nn.Module):
         self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
+
+    def disable_layer_norm(self):
+        for layer in self.layers:
+            layer.disable_layer_norm()
 
     def forward(
         self,
@@ -297,6 +305,10 @@ class TransformerEncoderLayer(nn.Module):
 
         self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
+        self.apply_layer_norm = True
+
+    def disable_layer_norm(self):
+        self.apply_layer_norm = False
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -311,10 +323,12 @@ class TransformerEncoderLayer(nn.Module):
         q = k = self.with_pos_embed(src, pos)
         src2 = self.self_attn(q, k, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
-        src = self.norm1(src)
+        if self.apply_layer_norm:
+            src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
-        src = self.norm2(src)
+        if self.apply_layer_norm:
+            src = self.norm2(src)
         return src
 
     def forward_pre(
@@ -324,11 +338,17 @@ class TransformerEncoderLayer(nn.Module):
         src_key_padding_mask: Optional[Tensor] = None,
         pos: Optional[Tensor] = None,
     ):
-        src2 = self.norm1(src)
+        if self.apply_layer_norm:
+            src2 = self.norm1(src)
+        else:
+            src2 = src
         q = k = self.with_pos_embed(src2, pos)
         src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
-        src2 = self.norm2(src)
+        if self.apply_layer_norm:
+            src2 = self.norm2(src)
+        else:
+            src2 = src
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
         src = src + self.dropout2(src2)
         return src

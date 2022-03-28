@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from .backbone import MultitaskResNet101
+from .rednet import load_rednet
 from .mdetr import build_mdetr
 
 from habitat import logger
@@ -721,3 +722,26 @@ class NavRnn(nn.Module):
         )
 
         return output, hidden
+
+
+def build_cnn_model(
+    model_name: str, device: torch.device, checkpoint_path: str = None
+) -> nn.Module:
+
+    if model_name in ["multitask_cnn", "resnet101"]:
+        model_class_name = MultitaskCNN if model_name == "multitask_cnn" \
+            else MultitaskResNet101
+        model = model_class_name(checkpoint_path=checkpoint_path)
+
+        if checkpoint_path is not None:
+            state_dict = torch.load(checkpoint_path)
+            model.load_state_dict(state_dict["model"])
+        model.to(device)
+
+        return model
+
+    elif model_name == "rednet":
+        return load_rednet(device, checkpoint_path)
+
+    else:
+        assert False, f"Don't know CNN {model_name}"

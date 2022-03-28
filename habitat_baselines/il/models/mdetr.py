@@ -4,6 +4,7 @@
 MDETR model and criterion classes.
 """
 from typing import List, Dict, Optional
+from tqdm import tqdm
 
 import torch
 import torch.distributed
@@ -841,7 +842,7 @@ class MLP(nn.Module):
 
 
 # TODO: detection losses....
-def build_mdetr(device, args, ans_vocab_size=None):
+def build_mdetr(args, ans_vocab_size=None):
     num_classes = 255
 
     # TODO: do we need VQA2?
@@ -865,6 +866,31 @@ def build_mdetr(device, args, ans_vocab_size=None):
         split_qa_heads=args.IL.MDETR.split_qa_heads,
         # predict_final=args.IL.MDETR.predict_final,
     )
+
+    # Print total, backbone and text encoder trainable params
+    print(
+        "Total number of trainable params:\n",
+        sum(p.numel() for p in model.parameters() if p.requires_grad),
+        sep=""
+    )
+    print(
+        "Amongst them for the visual part:\n",
+        sum(
+            p.numel()
+            for n, p in model.named_parameters()
+            if p.requires_grad and "backbone" in n
+        ),
+        sep="")
+    print(
+        "And for the text part:\n",
+        sum(
+            p.numel()
+            for n, p in model.named_parameters()
+            if p.requires_grad and "text_encoder" in n
+        ),
+        sep=""
+    )
+
     # if args.mask_model != "none":
     #     model = DETRsegm(
     #         model,
@@ -938,38 +964,70 @@ def build_mdetr(device, args, ans_vocab_size=None):
     # else:
     #     contrastive_criterion = None
 
-    qa_criterion = QACriterionVQA(split_qa_heads=args.IL.MDETR.split_qa_heads)
-    qa_criterion.to(device)
+    # qa_criterion = QACriterionVQA(split_qa_heads=args.IL.MDETR.split_qa_heads)
+    # qa_criterion.to(device)
 
     # return model, criterion, contrastive_criterion, qa_criterion, weight_dict
-    return model, qa_criterion
+    return model, None
 
 
-# def build_for_fb(args):
-#     num_classes = 255
-#     # device = torch.device(args.device)
-#
-#     assert not args.masks or args.mask_model != "none"
-#
-#     qa_dataset = "gqa" if "gqa" in args.combine_datasets_test else "vqa2"
-#
-#     backbone = build_backbone(args)
-#     transformer = build_transformer(args)
-#     model = MDETR(
-#         backbone,
-#         transformer,
-#         num_classes=num_classes,
-#         num_queries=args.num_queries,
-#         qa_dataset=qa_dataset,
-#         split_qa_heads=args.split_qa_heads,
-#         # predict_final=args.predict_final,
-#     )
-#     if args.mask_model != "none":
-#         model = DETRsegm(
-#             model,
-#             mask_head=args.mask_model,
-#             freeze_detr=(args.frozen_weights is not None),
-#         )
-#     # matcher = build_matcher(args)
-#
-#     return model
+def load_mdetr_ckpt(model, checkpoint_path):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+    # Correct head mismatch
+    del checkpoint["model"]["answer_head.weight"]
+    del checkpoint["model"]["answer_head.bias"]
+    model.load_state_dict(checkpoint["model"], strict=False)
+
+    return model
+
+
+# TODO: dt-fixup is encoder only. Decoder is not supported yet.
+def apply_dt_fixup(device, mdetr_model, train_loader):
+    """
+    Implementation of DT-Fixup for MDETR's encoder.
+    https://arxiv.org/pdf/2012.15355.pdf
+    """
+
+    mdetr_model.train().to(device)
+    with torch.no_grad():
+        # Apply Xavier initialization
+        for layer in mdetr_model.transformer.encoder.layers:
+            layer.self_attn._reset_parameters()
+
+        # Remove all layer normalization (we don't have learning rate warm-up)
+        mdetr_model.transformer.remove_enc_layer_norm()
+
+        max_norm = -1.
+        # Get the max input norm
+        for batch in tqdm(train_loader, desc="Going through train split"):
+            episode_ids, questions, answers, frame_queue = batch
+            frame_queue = frame_queue.to(device)
+            memory_cache = mdetr_model(
+                frame_queue, questions, encode_and_save=True
+            )
+            enc_attn_inputs = \
+                memory_cache["encoder_attn_max_input"].permute(1, 0, 2)
+            cur_max_norm = torch.linalg.norm(enc_attn_inputs, dim=(1, 2))
+            cur_max_norm = cur_max_norm.max().item()
+            if max_norm < cur_max_norm:
+                max_norm = cur_max_norm
+
+        # Scale v, w in the attention block and weight matrices in the MLP
+        N = float(len(mdetr_model.transformer.encoder.layers)) / 2.
+        scale_factor = N ** -0.5 / (2 * max_norm)
+        for layer in mdetr_model.transformer.encoder.layers:
+            # Get the same division as in
+            # https://github.com/pytorch/pytorch/blob/0524b2829a1775016f8b7ee4db8205edebfc4520/torch/nn/functional.py#L5210
+            # In our case k is not v inside self_attn,
+            # so this line is executed:
+            # https://github.com/pytorch/pytorch/blob/0524b2829a1775016f8b7ee4db8205edebfc4520/torch/nn/functional.py#L4903
+            q, k, v = layer.self_attn.in_proj_weight.chunk(3)
+            # Scale v, w matrices
+            v *= scale_factor
+            layer.self_attn.out_proj.weight *= scale_factor
+            # MLP
+            layer.linear1.weight *= scale_factor
+            layer.linear2.weight *= scale_factor
+
+    return mdetr_model

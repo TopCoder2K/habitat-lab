@@ -24,6 +24,7 @@ from habitat_baselines.il.metrics import VqaMetric
 from habitat_baselines.il.models.models import (
     VqaLstmCnnAttentionModel, build_mdetr
 )
+from habitat_baselines.il.models.mdetr import apply_dt_fixup, load_mdetr_ckpt
 from habitat_baselines.utils.common import img_bytes_2_np_array
 from habitat_baselines.utils.visualizations.utils import save_vqa_image_results
 
@@ -158,41 +159,16 @@ class VQATrainer(BaseILTrainer):
                 optimizer, lambda lr: lr  # lr isn't changed
             )
         else:
-            model, qa_criterion = build_mdetr(
-                self.device, config, len(ans_vocab_dict.word2idx_dict)
+            model, _ = build_mdetr(
+                config, len(ans_vocab_dict.word2idx_dict)
             )
-            # Print total, backbone and text encoder trainable params
-            print(
-                "Total number of trainable params:\n",
-                sum(p.numel() for p in model.parameters() if p.requires_grad),
-                sep=""
-            )
-            print(
-                "Amongst them for the visual part:\n",
-                sum(
-                    p.numel()
-                    for n, p in model.named_parameters()
-                    if p.requires_grad and "backbone" in n
-                ),
-                sep="")
-            print(
-                "And for the text part:\n",
-                sum(
-                    p.numel()
-                    for n, p in model.named_parameters()
-                    if p.requires_grad and "text_encoder" in n
-                ),
-                sep=""
-            )
-
-            # Load checkpoint
-            checkpoint_path = config.TRAIN_CKPT_PATH
-            logger.info(f"Loading MDETR from {checkpoint_path}")
-            checkpoint = torch.load(checkpoint_path, map_location="cpu")
-            # Correcting head mismatch
-            del checkpoint["model"]["answer_head.weight"]
-            del checkpoint["model"]["answer_head.bias"]
-            model.load_state_dict(checkpoint["model"], strict=False)
+            if config.TRAIN_CKPT_PATH:
+                checkpoint_path = config.TRAIN_CKPT_PATH
+                logger.info(f"Loading MDETR from {checkpoint_path}")
+                model = load_mdetr_ckpt(model, checkpoint_path)
+            if config.IL.MDETR.apply_dt_fixup:
+                logger.info("Applying DT-Fixup to MDETR")
+                model = apply_dt_fixup(self.device, model, train_loader)
 
             param_dicts = [
                 {
@@ -227,7 +203,11 @@ class VQATrainer(BaseILTrainer):
             lr_scheduler_name = config.IL.VQA.lr_scheduler
             if lr_scheduler_name == "CosineAnnealingLR":
                 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer, T_max=200, eta_min=float(config.IL.MDETR.lr)/100
+                    optimizer, T_max=200, eta_min=float(config.IL.MDETR.lr)/10
+                )
+            elif lr_scheduler_name == "None":
+                lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                    optimizer, lambda lr: lr  # lr isn't changed
                 )
             else:
                 assert False, f"Unknown lr_scheduler {lr_scheduler_name}"
@@ -435,13 +415,10 @@ class VQATrainer(BaseILTrainer):
             model.to(self.device)
         else:
             model, _ = build_mdetr(
-                self.device, config, len(ans_vocab_dict.word2idx_dict)
+                config, len(ans_vocab_dict.word2idx_dict)
             )
             logger.info(f"Loading MDETR from {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
-            # TODO: delete deletion or ?
-            # del checkpoint["model"]["answer_head.weight"]
-            # del checkpoint["model"]["answer_head.bias"]
             model.load_state_dict(checkpoint["model"], strict=False)
             model.eval()
             model.to(self.device)
