@@ -156,7 +156,7 @@ class VQATrainer(BaseILTrainer):
                 lr=float(config.IL.VQA.lr),
             )
             lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-                optimizer, lambda lr: lr  # lr isn't changed
+                optimizer, lambda epoch_num: 1  # lr isn't changed
             )
         else:
             model, _ = build_mdetr(
@@ -207,7 +207,7 @@ class VQATrainer(BaseILTrainer):
                 )
             elif lr_scheduler_name == "None":
                 lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-                    optimizer, lambda lr: lr  # lr isn't changed
+                    optimizer, lambda epoch_num: 1  # lr isn't changed
                 )
             else:
                 assert False, f"Unknown lr_scheduler {lr_scheduler_name}"
@@ -284,7 +284,7 @@ class VQATrainer(BaseILTrainer):
 
                     loss.backward()
                     optimizer.step()
-                    lr_scheduler.step()  # Especially was put here
+                    # lr_scheduler.step()  # Especially was put here
 
                     (
                         metrics_loss,

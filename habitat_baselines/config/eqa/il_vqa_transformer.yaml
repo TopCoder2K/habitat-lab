@@ -70,7 +70,7 @@ IL:
     dim_feedforward: 2048
     dropout: 0.1
     activation: "relu"
-    pre_norm: False  # Whether to run LayerNorm in Transformer before going through the layer or not. TODO: should we use True?
+    pre_norm: False  # Whether to run LayerNorm in Transformer before going through the layer or not.
     text_encoder_type: "roberta-base"
     freeze_text_encoder: False
 

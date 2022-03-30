@@ -84,6 +84,11 @@ class Transformer(nn.Module):
     def remove_enc_layer_norm(self):
         self.encoder.disable_layer_norm()
 
+    def init_enc_with_xavier(self):
+        for p in self.encoder.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
     def forward(
         self,
         src=None,

@@ -992,8 +992,7 @@ def apply_dt_fixup(device, mdetr_model, train_loader):
     mdetr_model.train().to(device)
     with torch.no_grad():
         # Apply Xavier initialization
-        for layer in mdetr_model.transformer.encoder.layers:
-            layer.self_attn._reset_parameters()
+        mdetr_model.transformer.init_enc_with_xavier()
 
         # Remove all layer normalization (we don't have learning rate warm-up)
         mdetr_model.transformer.remove_enc_layer_norm()
@@ -1013,20 +1012,27 @@ def apply_dt_fixup(device, mdetr_model, train_loader):
             if max_norm < cur_max_norm:
                 max_norm = cur_max_norm
 
-        # Scale v, w in the attention block and weight matrices in the MLP
-        N = float(len(mdetr_model.transformer.encoder.layers)) / 2.
+        # TODO: In the original paper in section 3.1 number N defined
+        #  as the half of the number of self-attention and MLP layers,
+        #  so N = L. But then it's written "Let L = 2N".
+        #  This is at least strange... Let's try N = L.
+        N = len(mdetr_model.transformer.encoder.layers)
         scale_factor = N ** -0.5 / (2 * max_norm)
+
+        # Scale v, w in the attention block and weight matrices in the MLP
         for layer in mdetr_model.transformer.encoder.layers:
             # Get the same division as in
             # https://github.com/pytorch/pytorch/blob/0524b2829a1775016f8b7ee4db8205edebfc4520/torch/nn/functional.py#L5210
-            # In our case k is not v inside self_attn,
-            # so this line is executed:
+            # In our case self_attn._qkv_same_embed_dim = True
+            # => use_separate_proj_weight = False
+            # => _in_projection_packed() is run.
+            # k is not v => this line is executed:
             # https://github.com/pytorch/pytorch/blob/0524b2829a1775016f8b7ee4db8205edebfc4520/torch/nn/functional.py#L4903
-            q, k, v = layer.self_attn.in_proj_weight.chunk(3)
+            w_q, w_k, w_v = layer.self_attn.in_proj_weight.chunk(3)
             # Scale v, w matrices
-            v *= scale_factor
+            w_v *= scale_factor
             layer.self_attn.out_proj.weight *= scale_factor
-            # MLP
+            # Scale MLP weights
             layer.linear1.weight *= scale_factor
             layer.linear2.weight *= scale_factor
 
